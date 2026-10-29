@@ -26,6 +26,13 @@ func _ready() -> void:
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 	_add_backdrop_blobs()
+	var version := UiTheme.label("Version %s" % Net.game_version(), 16, UiTheme.MUTED)
+	version.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	version.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	version.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	version.offset_right = -16
+	version.offset_bottom = -10
+	add_child(version)
 	_main_page = _build_main_page()
 	_lobby_page = _build_lobby_page()
 	Net.players_changed.connect(_refresh_lobby)
@@ -118,6 +125,10 @@ func _refresh_hosts() -> void:
 		var b := Button.new()
 		var state := "in game" if info.get("in_game", false) else "in lobby"
 		b.text = "%s's game  -  %d/%d players, %s  (%s)" % [info.get("name", "?"), info.get("players", 0), info.get("max", 20), state, ip]
+		var host_version: String = info.get("version", "?")
+		if host_version != Net.game_version():
+			b.text += "  -  needs version %s" % host_version
+			b.disabled = true
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.pressed.connect(func(): _on_join(ip))
 		_hosts_box.add_child(b)

@@ -7,13 +7,31 @@ A LAN prop-hunt party game for up to 20 players, made with Godot 4.7.
 
 ## Playing at a LAN party
 
-1. Export the game (or run it from the editor) on every PC.
+1. On every PC, download `Hide-Seek-Launcher.exe` from the
+   [latest release](https://github.com/Thyestee/Hide-Seek/releases/latest) and run it.
+   It installs the game in a `game` folder next to itself, updates it whenever a new release is out, and starts it.
 2. One player clicks **Host a game**. The lobby shows that PC's LAN IP address.
 3. Everyone else either picks the game from **Games on your network** or types the host's IP and clicks **Join**.
 4. The host chooses how long hiding and seeking last, then clicks **Start game**. Players who join late come in as seekers.
 
 The first time a PC hosts or joins, Windows Firewall asks for permission. Allow **private networks**.
 The game uses UDP port 7777 (game traffic) and UDP port 7778 (LAN discovery).
+
+Everyone must run the same version: the host turns away players on a different build and tells them to update.
+Without internet, the launcher still starts the version that's already installed.
+
+## Publishing a new version
+
+Push a version tag. The GitHub Actions workflow (`.github/workflows/release.yml`) builds the game and the launcher,
+then publishes them as a GitHub release. Launchers pick up the new release the next time they start.
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+To build locally instead, run `GODOT=path/to/godot tools/build.sh v0.2.0`.
+The results go to `build/`: `Hide-Seek-windows.zip` (the game) and `Hide-Seek-Launcher.exe`.
 
 ## Rounds
 
@@ -54,3 +72,5 @@ godot --path . -- --join=127.0.0.1 --name=Alice --bot
 - `scripts/world/`: map builder, prop catalogue, world effects
 - `scripts/player/player.gd`: movement, cameras and abilities
 - `scripts/ui/`: menu, lobby and HUD
+- `launcher/`: the launcher, a separate small Godot project (`launcher/launcher.gd`)
+- `tools/build.sh`: exports the game zip and the launcher

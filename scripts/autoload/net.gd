@@ -32,6 +32,7 @@ var found_hosts := {}  # ip -> info dictionary from the host's broadcast
 var _broadcaster: PacketPeerUDP
 var _listener: PacketPeerUDP
 var _broadcast_timer := 0.0
+var _rejection := ""  # why the host turned us away, shown after the disconnect
 
 
 func _ready() -> void:
@@ -49,7 +50,7 @@ func _process(delta: float) -> void:
 			_broadcast_timer = 1.0
 			var info := {
 				"game": GAME_TAG, "name": player_name, "players": players.size(),
-				"max": MAX_PLAYERS, "in_game": Game.in_game(),
+				"max": MAX_PLAYERS, "in_game": Game.in_game(), "version": game_version(),
 			}
 			_broadcaster.put_packet(JSON.stringify(info).to_utf8_buffer())
 	if _listener:
@@ -98,6 +99,8 @@ func leave(reason := "") -> void:
 	online = false
 	players.clear()
 	Game.reset()
+	if reason != "":
+		print("[net] ", reason)
 	connection_closed.emit(reason)
 
 
@@ -121,8 +124,13 @@ func local_addresses() -> PackedStringArray:
 	return out
 
 
+func game_version() -> String:
+	return ProjectSettings.get_setting("application/config/version", "dev")
+
+
 func _on_connected() -> void:
-	rpc_id(1, "rpc_register", player_name)
+	_rejection = ""
+	rpc_id(1, "rpc_register", player_name, game_version())
 	connected_to_host.emit()
 
 
@@ -131,7 +139,7 @@ func _on_connection_failed() -> void:
 
 
 func _on_server_disconnected() -> void:
-	leave("The host closed the game.")
+	leave(_rejection if _rejection != "" else "The host closed the game.")
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -142,16 +150,33 @@ func _on_peer_disconnected(id: int) -> void:
 
 
 @rpc("any_peer", "reliable")
-func rpc_register(requested_name: String) -> void:
+func rpc_register(requested_name: String, version: String) -> void:
 	if not is_host():
 		return
 	var id := multiplayer.get_remote_sender_id()
+	if version != game_version():
+		# Different builds don't speak the same network protocol.
+		_reject(id, "The host runs version %s but you have %s. Update the game with the launcher." % [game_version(), version])
+		return
 	if players.size() >= MAX_PLAYERS:
-		multiplayer.multiplayer_peer.disconnect_peer(id)
+		_reject(id, "The game is full (%d players)." % MAX_PLAYERS)
 		return
 	players[id] = {"name": _unique_name(requested_name), "color": _free_color()}
 	rpc("rpc_sync_players", players)
 	Game.on_player_registered(id)
+
+
+func _reject(id: int, reason: String) -> void:
+	rpc_id(id, "rpc_rejected", reason)
+	get_tree().create_timer(0.5).timeout.connect(func():
+		if multiplayer.multiplayer_peer:
+			multiplayer.multiplayer_peer.disconnect_peer(id)
+	)
+
+
+@rpc("authority", "reliable")
+func rpc_rejected(reason: String) -> void:
+	_rejection = reason
 
 
 @rpc("authority", "call_local", "reliable")
