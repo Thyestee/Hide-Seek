@@ -1,8 +1,10 @@
 extends CanvasLayer
-## In-game overlay: timer, role, abilities, messages, scoreboard and pause menu.
+## In-game overlay: timer, role, health, spells, messages, scoreboard and menu.
 
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 const PropLib = preload("res://scripts/world/prop_library.gd")
+const Spells = preload("res://scripts/spells.gd")
+const LoadoutPanel = preload("res://scripts/ui/loadout_panel.gd")
 
 var ui_theme: Theme
 
@@ -13,17 +15,23 @@ var _role_label: Label
 var _hint_label: Label
 var _prompt_label: Label
 var _hp_bar: ProgressBar
+var _hp_label: Label
+var _charges_label: Label
+var _spell_labels: Array[Label] = []
 var _crosshair: Label
 var _feed: VBoxContainer
 var _blackout: ColorRect
 var _blackout_label: Label
+var _status_label: Label
 var _scoreboard: PanelContainer
 var _score_grid: GridContainer
 var _end_panel: PanelContainer
 var _end_title: Label
 var _end_sub: Label
 var _pause_panel: Control
+var _loadout: VBoxContainer
 var _lobby_button: Button
+var _bot_row: HBoxContainer
 var _damage: ColorRect
 var _last_tick := -1
 
@@ -44,20 +52,23 @@ func _ready() -> void:
 	Game.phase_changed.connect(func(_p): _end_panel.visible = Game.phase == Game.Phase.ROUND_END)
 
 
+func _full_rect(c: Control) -> void:
+	c.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
 func _build() -> void:
 	_damage = ColorRect.new()
 	_damage.color = Color(1, 0.1, 0.1, 0)
-	_damage.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_damage.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_full_rect(_damage)
 	_root.add_child(_damage)
 
 	_blackout = ColorRect.new()
 	_blackout.color = Color(0.03, 0.03, 0.06, 0.97)
-	_blackout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_blackout.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_full_rect(_blackout)
 	_root.add_child(_blackout)
 	_blackout_label = UiTheme.outlined("", 34)
-	_blackout_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_full_rect(_blackout_label)
 	_blackout_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_blackout_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_blackout.add_child(_blackout_label)
@@ -87,11 +98,10 @@ func _build() -> void:
 	_feed.offset_left = -560
 	_feed.offset_right = -20
 	_feed.offset_top = 16
-	_feed.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_feed.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_feed)
 
-	# Centre: crosshair and the "press E" prompt.
+	# Centre: crosshair, the "press E" prompt and status effects.
 	_crosshair = UiTheme.outlined("+", 30)
 	_crosshair.set_anchors_preset(Control.PRESET_CENTER)
 	_crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -102,37 +112,63 @@ func _build() -> void:
 	_crosshair.offset_bottom = 18
 	_crosshair.pivot_offset = Vector2(20, 20)
 	_root.add_child(_crosshair)
-	_prompt_label = UiTheme.outlined("", 22, UiTheme.ACCENT)
-	_prompt_label.set_anchors_preset(Control.PRESET_CENTER)
-	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_prompt_label.offset_left = -300
-	_prompt_label.offset_right = 300
-	_prompt_label.offset_top = 30
-	_prompt_label.offset_bottom = 60
-	_root.add_child(_prompt_label)
+	_prompt_label = _centered_label(22, UiTheme.ACCENT, 30)
+	_status_label = _centered_label(24, Color(1.0, 0.6, 0.4), 64)
 
-	# Bottom: health and ability hints.
+	# Bottom: health or bolts, spells, hints.
 	var bottom := VBoxContainer.new()
 	bottom.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	bottom.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	bottom.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	bottom.offset_bottom = -18
 	bottom.alignment = BoxContainer.ALIGNMENT_END
+	bottom.add_theme_constant_override("separation", 6)
 	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(bottom)
+	var hp_row := HBoxContainer.new()
+	hp_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	hp_row.add_theme_constant_override("separation", 10)
+	bottom.add_child(hp_row)
 	_hp_bar = ProgressBar.new()
-	_hp_bar.max_value = Game.MAX_HP
 	_hp_bar.custom_minimum_size = Vector2(320, 22)
 	_hp_bar.show_percentage = false
-	_hp_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	bottom.add_child(_hp_bar)
-	_hint_label = UiTheme.outlined("", 20)
+	hp_row.add_child(_hp_bar)
+	_hp_label = UiTheme.outlined("", 20)
+	hp_row.add_child(_hp_label)
+	_charges_label = UiTheme.outlined("", 26, Color(0.6, 0.92, 1.0))
+	_charges_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	bottom.add_child(_charges_label)
+	var spells := HBoxContainer.new()
+	spells.alignment = BoxContainer.ALIGNMENT_CENTER
+	spells.add_theme_constant_override("separation", 14)
+	bottom.add_child(spells)
+	for slot in 2:
+		var panel := PanelContainer.new()
+		panel.custom_minimum_size = Vector2(230, 0)
+		spells.add_child(panel)
+		var l := UiTheme.label("", 19)
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		panel.add_child(l)
+		_spell_labels.append(l)
+	_hint_label = UiTheme.outlined("", 18, UiTheme.MUTED)
 	_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	bottom.add_child(_hint_label)
 
 	_build_scoreboard()
 	_build_end_panel()
 	_build_pause_menu()
+
+
+func _centered_label(size: int, color: Color, y: float) -> Label:
+	var l := UiTheme.outlined("", size, color)
+	l.set_anchors_preset(Control.PRESET_CENTER)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.offset_left = -400
+	l.offset_right = 400
+	l.offset_top = y
+	l.offset_bottom = y + 30
+	_root.add_child(l)
+	return l
 
 
 func _build_scoreboard() -> void:
@@ -178,13 +214,17 @@ func _build_pause_menu() -> void:
 	_pause_panel.visible = false
 	_root.add_child(_pause_panel)
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(420, 0)
+	panel.custom_minimum_size = Vector2(760, 0)
 	_pause_panel.add_child(panel)
+	var columns := HBoxContainer.new()
+	columns.add_theme_constant_override("separation", 28)
+	panel.add_child(columns)
+
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 10)
-	panel.add_child(box)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	columns.add_child(box)
 	var title := UiTheme.outlined("Menu", 36, UiTheme.ACCENT)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 	var resume := Button.new()
 	resume.text = "Resume"
@@ -201,6 +241,15 @@ func _build_pause_menu() -> void:
 		Net.save_settings()
 	)
 	box.add_child(slider)
+	_bot_row = HBoxContainer.new()
+	_bot_row.add_theme_constant_override("separation", 8)
+	box.add_child(_bot_row)
+	for pair in [["Add bot", Net.add_bot], ["Remove bot", Net.remove_bot]]:
+		var b := Button.new()
+		b.text = pair[0]
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.pressed.connect(pair[1])
+		_bot_row.add_child(b)
 	_lobby_button = Button.new()
 	_lobby_button.text = "End game, back to lobby"
 	_lobby_button.pressed.connect(func(): Game.host_return_to_lobby())
@@ -214,6 +263,13 @@ func _build_pause_menu() -> void:
 	quit.pressed.connect(func(): get_tree().quit())
 	box.add_child(quit)
 
+	var setup := VBoxContainer.new()
+	setup.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	columns.add_child(setup)
+	setup.add_child(UiTheme.outlined("Team & spells", 26, UiTheme.ACCENT))
+	_loadout = LoadoutPanel.new()
+	setup.add_child(_loadout)
+
 
 # --- Per-frame update --------------------------------------------------------
 
@@ -222,6 +278,7 @@ func _process(_delta: float) -> void:
 		return
 	var me := Game.local_player()
 	var role := Game.my_role()
+	var id := Game.my_id()
 	var seconds := ceili(Game.time_left)
 	var clock := "%d:%02d" % [seconds / 60, seconds % 60]
 	if Game.phase == Game.Phase.HIDING:
@@ -238,25 +295,49 @@ func _process(_delta: float) -> void:
 	_last_tick = seconds
 	_count_label.text = "Hiders left: %d    Seekers: %d" % [Game.count_role("hider"), Game.count_role("seeker")]
 
-	if role == "seeker":
-		_role_label.text = "SEEKER"
-		_role_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45))
-	else:
-		_role_label.text = "HIDER"
-		_role_label.add_theme_color_override("font_color", Color(0.5, 1.0, 0.55))
+	var seeker := role == "seeker"
+	_role_label.text = "SEEKER" if seeker else "HIDER"
+	_role_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45) if seeker else Color(0.5, 1.0, 0.55))
 
 	var frozen: bool = me != null and me.frozen
 	_blackout.visible = frozen
 	if frozen:
 		_blackout_label.text = "You are a SEEKER\n\nThe hiders are hiding...\nYou are released in %s" % clock
 
-	_hp_bar.visible = role == "hider"
-	_hp_bar.value = Game.hp.get(Game.my_id(), Game.MAX_HP)
+	# Health for hiders, bolts for seekers.
+	_hp_bar.visible = not seeker
+	_hp_label.visible = not seeker
+	var top := Game.max_hp_of(id)
+	var current: int = Game.hp.get(id, top)
+	_hp_bar.max_value = top
+	_hp_bar.value = current
+	_hp_label.text = "%d / %d HP" % [current, top]
+	_charges_label.visible = seeker
+	var charges := int(Game.local_charges())
+	_charges_label.text = "Bolts  " + "●".repeat(charges) + "○".repeat(int(Game.BOLT_CHARGES) - charges)
+
+	for slot in 2:
+		var spell := Game.spell_in_slot(id, slot)
+		var key := Game.key_label("spell1" if slot == 0 else "spell2")
+		var left := Game.cooldown_left(id, spell)
+		var state := "ready" if left <= 0.0 else "%ds" % ceili(left)
+		_spell_labels[slot].text = "[%s] %s  %s" % [key, Spells.spell_name(spell), state]
+		_spell_labels[slot].add_theme_color_override("font_color", UiTheme.TEXT if left <= 0.0 else UiTheme.MUTED.darkened(0.25))
+
 	_hint_label.text = _hints(me, role)
 	_prompt_label.text = ""
 	if me and role == "hider" and me.look_prop != "" and me.look_prop != me.disguise:
-		_prompt_label.text = "[%s] Become: %s" % [Game.key_label("mimic"), PropLib.display_name(me.look_prop)]
+		_prompt_label.text = "[%s] Become: %s (%d HP)" % [Game.key_label("mimic"), PropLib.display_name(me.look_prop), PropLib.max_hp_for(me.look_prop)]
+	_status_label.text = ""
+	if me:
+		if me.root_timer > 0.0:
+			_status_label.text = "Snared! %.1fs" % me.root_timer
+		elif me.reveal_timer > 0.0:
+			_status_label.text = "You are marked! %.1fs" % me.reveal_timer
+		elif me.haste_timer > 0.0:
+			_status_label.text = "Haste %.1fs" % me.haste_timer
 	_lobby_button.visible = Net.is_host()
+	_bot_row.visible = Net.is_host()
 
 	var show_scores := Input.is_action_pressed("scoreboard") and not _pause_panel.visible
 	if show_scores and not _scoreboard.visible:
@@ -268,13 +349,12 @@ func _hints(me: Node, role: String) -> String:
 	if me == null:
 		return ""
 	if role == "seeker":
-		var sonar := "ready" if me.sonar_cooldown <= 0.0 else "%ds" % ceili(me.sonar_cooldown)
-		return "[%s] Bonk     [%s / RMB] Sonar: %s     [Shift] Run" % [Game.key_label("swing"), Game.key_label("sonar"), sonar]
+		return "[%s] Shoot     [Shift] Run     [Tab] Scores" % Game.key_label("throw")
 	var lock := "on" if me.rotation_locked else "off"
-	var taunt := "ready" if me.taunt_cooldown <= 0.0 else "%ds" % ceili(me.taunt_cooldown)
-	return "[%s] Mimic     [%s] Lock rotation: %s     [%s] Taunt: %s     [%s] Decoy x%d" % [
-		Game.key_label("mimic"), Game.key_label("lock_rotation"), lock,
-		Game.key_label("taunt"), taunt, Game.key_label("decoy"), Game.decoys_left,
+	var taunt_left := Game.cooldown_left(Game.my_id(), "taunt")
+	var taunt := "ready" if taunt_left <= 0.0 else "%ds" % ceili(taunt_left)
+	return "[%s] Mimic     [%s] Lock rotation: %s     [%s] Taunt: %s" % [
+		Game.key_label("mimic"), Game.key_label("lock_rotation"), lock, Game.key_label("taunt"), taunt,
 	]
 
 
@@ -288,6 +368,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_close_pause()
 		else:
 			_pause_panel.visible = true
+			_loadout.refresh()
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and event.pressed and not _pause_panel.visible:

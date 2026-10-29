@@ -5,7 +5,7 @@ extends Node
 ##   --name=Bob  --host  --join=192.168.1.20  --autostart=N (host starts at N players)
 ##   --screenshot=path.png  (saves a screenshot a few seconds into the game, then quits)
 ##   --quit-after-round  (quits once the first round is over)
-##   --bot  (the local player plays by itself; see scripts/debug/bot.gd)
+##   --bots=N  (host adds N AI bots)  --team=hider|seeker|auto  --log (print game messages)
 
 const MenuScript = preload("res://scripts/ui/menu.gd")
 const HudScript = preload("res://scripts/ui/hud.gd")
@@ -60,9 +60,15 @@ func _handle_args() -> void:
 		_args[parts[0]] = parts[1] if parts.size() > 1 else ""
 	if _args.has("name"):
 		Net.player_name = _args.name
+	if _args.has("team"):
+		Net.team_preference = _args.team
+	if _args.has("log"):
+		Game.message.connect(func(text, _color): print("[%s] %s" % [Net.player_name, text]))
 	if _args.has("host"):
 		Net.host_game()
 		menu.show_lobby()
+		for i in int(_args.get("bots", "0")):
+			Net.add_bot()
 	elif _args.has("join"):
 		Net.join_game(_args.join)
 	if _args.has("autostart"):
@@ -72,12 +78,10 @@ func _handle_args() -> void:
 		)
 		Net.players_changed.emit()
 	if _args.has("screenshot"):
-		if _args.has("host") or _args.has("join"):
+		if _args.has("autostart") or _args.has("join"):
 			Game.entered_game.connect(_take_screenshot)
 		else:
 			_take_screenshot()
-	if _args.has("bot"):
-		add_child(load("res://scripts/debug/bot.gd").new())
 	if _args.has("quit-after-round"):
 		Game.round_ended.connect(func(winner):
 			print("Round over, winner: ", winner)

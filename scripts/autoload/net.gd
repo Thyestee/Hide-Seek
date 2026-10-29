@@ -12,6 +12,12 @@ const DISCOVERY_PORT := 7778
 const MAX_PLAYERS := 20
 const GAME_TAG := "hide-seek"
 const SETTINGS_PATH := "user://settings.cfg"
+const Spells = preload("res://scripts/spells.gd")
+const TEAMS := ["auto", "hider", "seeker"]
+const BOT_NAMES := [
+	"Pip", "Moss", "Tumble", "Fern", "Biscuit", "Nib", "Wobble", "Clover", "Pebble", "Sprout",
+	"Bramble", "Dot", "Puddle", "Acorn", "Waffle", "Thimble", "Sorrel", "Nutmeg", "Twig", "Juniper",
+]
 const COLORS := [
 	Color(0.95, 0.33, 0.30), Color(0.30, 0.60, 0.95), Color(0.35, 0.80, 0.35),
 	Color(0.98, 0.80, 0.25), Color(0.75, 0.40, 0.90), Color(0.98, 0.55, 0.20),
@@ -22,10 +28,12 @@ const COLORS := [
 	Color(0.85, 0.55, 0.55), Color(0.20, 0.55, 0.35),
 ]
 
-var players := {}  # peer id -> {"name": String, "color": Color}
+var players := {}  # peer id -> {name, color, team, loadout, bot}; bots have negative ids
 var player_name := ""
 var last_ip := "127.0.0.1"
 var mouse_sensitivity := 1.0
+var team_preference := "auto"
+var loadout: Dictionary = Spells.DEFAULT_LOADOUT.duplicate(true)
 var online := false
 var found_hosts := {}  # ip -> info dictionary from the host's broadcast
 
@@ -33,6 +41,7 @@ var _broadcaster: PacketPeerUDP
 var _listener: PacketPeerUDP
 var _broadcast_timer := 0.0
 var _rejection := ""  # why the host turned us away, shown after the disconnect
+var _next_bot_id := -1
 
 
 func _ready() -> void:
@@ -66,7 +75,7 @@ func host_game() -> Error:
 		return err
 	multiplayer.multiplayer_peer = peer
 	online = true
-	players = {1: {"name": player_name, "color": COLORS[0]}}
+	players = {1: _entry(player_name, COLORS[0], team_preference, loadout, false)}
 	stop_discovery()
 	_broadcaster = PacketPeerUDP.new()
 	_broadcaster.set_broadcast_enabled(true)
@@ -130,7 +139,7 @@ func game_version() -> String:
 
 func _on_connected() -> void:
 	_rejection = ""
-	rpc_id(1, "rpc_register", player_name, game_version())
+	rpc_id(1, "rpc_register", player_name, game_version(), team_preference, loadout)
 	connected_to_host.emit()
 
 
@@ -150,7 +159,7 @@ func _on_peer_disconnected(id: int) -> void:
 
 
 @rpc("any_peer", "reliable")
-func rpc_register(requested_name: String, version: String) -> void:
+func rpc_register(requested_name: String, version: String, team: String, picks: Dictionary) -> void:
 	if not is_host():
 		return
 	var id := multiplayer.get_remote_sender_id()
@@ -161,9 +170,95 @@ func rpc_register(requested_name: String, version: String) -> void:
 	if players.size() >= MAX_PLAYERS:
 		_reject(id, "The game is full (%d players)." % MAX_PLAYERS)
 		return
-	players[id] = {"name": _unique_name(requested_name), "color": _free_color()}
+	players[id] = _entry(_unique_name(requested_name), _free_color(), team, picks, false)
 	rpc("rpc_sync_players", players)
 	Game.on_player_registered(id)
+
+
+func _entry(player_name_: String, color: Color, team: String, picks, bot: bool) -> Dictionary:
+	return {
+		"name": player_name_, "color": color, "team": team if team in TEAMS else "auto",
+		"loadout": Spells.sanitize(picks), "bot": bot,
+	}
+
+
+func is_bot(id: int) -> bool:
+	return players.get(id, {}).get("bot", false)
+
+
+func bot_count() -> int:
+	var n := 0
+	for id in players:
+		if is_bot(id):
+			n += 1
+	return n
+
+
+## Saves this player's team and spells and tells the host.
+func set_preferences(team: String, picks: Dictionary) -> void:
+	team_preference = team
+	loadout = Spells.sanitize(picks)
+	save_settings()
+	if online and players.has(multiplayer.get_unique_id()):
+		rpc_id(1, "rpc_set_prefs", team_preference, loadout)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_set_prefs(team: String, picks: Dictionary) -> void:
+	if not is_host():
+		return
+	var id := multiplayer.get_remote_sender_id()
+	if id == 0:
+		id = multiplayer.get_unique_id()
+	if not players.has(id):
+		return
+	players[id].team = team if team in TEAMS else "auto"
+	players[id].loadout = Spells.sanitize(picks)
+	rpc("rpc_sync_players", players)
+	Game.on_team_preference_changed(id)
+
+
+# --- Bots (host only) --------------------------------------------------------
+
+func add_bot() -> void:
+	if not is_host() or players.size() >= MAX_PLAYERS:
+		return
+	var id := _next_bot_id
+	_next_bot_id -= 1
+	var taken := []
+	for info in players.values():
+		taken.append(info.name)
+	var bot_name := ""
+	for candidate in BOT_NAMES:
+		if not "Bot %s" % candidate in taken:
+			bot_name = "Bot %s" % candidate
+			break
+	if bot_name == "":
+		bot_name = _unique_name("Bot")
+	players[id] = _entry(bot_name, _free_color(), "auto", Spells.random_loadout(), true)
+	rpc("rpc_sync_players", players)
+	Game.on_player_registered(id)
+
+
+func remove_bot() -> void:
+	if not is_host():
+		return
+	var bots := []
+	for id in players:
+		if is_bot(id):
+			bots.append(id)
+	if bots.is_empty():
+		return
+	bots.sort()  # newest bot has the lowest id
+	var id: int = bots[0]
+	players.erase(id)
+	rpc("rpc_sync_players", players)
+	rpc("rpc_bot_left", id)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_bot_left(id: int) -> void:
+	Game.on_peer_left(id)
 
 
 func _reject(id: int, reason: String) -> void:
@@ -258,11 +353,15 @@ func _load_settings() -> void:
 	player_name = cfg.get_value("player", "name", default_name)
 	last_ip = cfg.get_value("player", "last_ip", last_ip)
 	mouse_sensitivity = cfg.get_value("controls", "mouse_sensitivity", mouse_sensitivity)
+	team_preference = cfg.get_value("player", "team", team_preference)
+	loadout = Spells.sanitize(cfg.get_value("player", "loadout", loadout))
 
 
 func save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("player", "name", player_name)
 	cfg.set_value("player", "last_ip", last_ip)
+	cfg.set_value("player", "team", team_preference)
+	cfg.set_value("player", "loadout", loadout)
 	cfg.set_value("controls", "mouse_sensitivity", mouse_sensitivity)
 	cfg.save(SETTINGS_PATH)

@@ -2,6 +2,7 @@ extends Control
 ## Title screen (host / join / LAN browser) and the lobby.
 
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
+const LoadoutPanel = preload("res://scripts/ui/loadout_panel.gd")
 
 var _main_page: Control
 var _lobby_page: Control
@@ -17,6 +18,8 @@ var _hide_spin: SpinBox
 var _seek_spin: SpinBox
 var _start_button: Button
 var _waiting_label: Label
+var _bot_buttons: HBoxContainer
+var _loadout: VBoxContainer
 
 
 func _ready() -> void:
@@ -169,7 +172,7 @@ func _check_name() -> bool:
 # --- Lobby -------------------------------------------------------------------
 
 func _build_lobby_page() -> Control:
-	var page := _centered_panel(760)
+	var page := _centered_panel(1080)
 	var box: VBoxContainer = page.get_meta("box")
 	var title := UiTheme.outlined("Lobby", 44, UiTheme.ACCENT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -195,6 +198,24 @@ func _build_lobby_page() -> Control:
 	_players_box = VBoxContainer.new()
 	_players_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_players_box)
+	_bot_buttons = HBoxContainer.new()
+	_bot_buttons.add_theme_constant_override("separation", 8)
+	left.add_child(_bot_buttons)
+	var add_bot := Button.new()
+	add_bot.text = "Add bot"
+	add_bot.pressed.connect(Net.add_bot)
+	_bot_buttons.add_child(add_bot)
+	var remove_bot := Button.new()
+	remove_bot.text = "Remove bot"
+	remove_bot.pressed.connect(Net.remove_bot)
+	_bot_buttons.add_child(remove_bot)
+
+	var middle := VBoxContainer.new()
+	middle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	columns.add_child(middle)
+	middle.add_child(UiTheme.label("Your setup", 20, UiTheme.TEXT))
+	_loadout = LoadoutPanel.new()
+	middle.add_child(_loadout)
 
 	var right := VBoxContainer.new()
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -202,14 +223,15 @@ func _build_lobby_page() -> Control:
 	columns.add_child(right)
 	right.add_child(UiTheme.label("How to play", 20, UiTheme.TEXT))
 	var rules := UiTheme.label(
-		"Hiders mimic props and try to survive until the timer runs out. "
-		+ "Seekers bonk suspicious furniture; found hiders join the seekers.\n\n"
-		+ "HIDER  E mimic prop · R lock rotation · F taunt (+points) · G drop decoy\n"
-		+ "SEEKER  Left click bonk · Q / right click sonar\n"
-		+ "Everyone: WASD move · Space jump · Shift run · Tab scores · Esc menu",
+		"Hiders mimic props and survive until the timer runs out; health regrows after a few quiet seconds. "
+		+ "Seekers shoot bolts at anything suspicious. Found hiders join the seekers.\n\n"
+		+ "HIDER  E mimic · R lock rotation · T taunt (+points)\n"
+		+ "SEEKER  Left click shoot bolts\n"
+		+ "BOTH  Q / F your two spells\n"
+		+ "WASD move · Space jump · Shift run · Tab scores · Esc menu",
 		16, UiTheme.MUTED)
 	rules.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	rules.custom_minimum_size = Vector2(320, 0)
+	rules.custom_minimum_size = Vector2(300, 0)
 	right.add_child(rules)
 
 	_host_settings = VBoxContainer.new()
@@ -270,10 +292,15 @@ func _refresh_lobby() -> void:
 			text += "  (host)"
 		if id == multiplayer.get_unique_id():
 			text += "  (you)"
-		row.add_child(UiTheme.label(text, 19))
+		var team: String = Net.players[id].get("team", "auto")
+		if team != "auto":
+			text += "  - wants %s" % ("hiders" if team == "hider" else "seekers")
+		row.add_child(UiTheme.label(text, 19, UiTheme.MUTED if Net.is_bot(id) else UiTheme.TEXT))
 		_players_box.add_child(row)
 	_players_title.text = "Players (%d/%d)" % [ids.size(), Net.MAX_PLAYERS]
 	var host := Net.is_host()
+	_bot_buttons.visible = host
+	_loadout.refresh()
 	_host_settings.visible = host
 	_start_button.visible = host
 	_waiting_label.visible = not host
